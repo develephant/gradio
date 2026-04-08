@@ -206,6 +206,7 @@ class Queue:
 
     def start(self):
         self.active_jobs = [None] * self.max_thread_count
+        self.loop = asyncio.get_event_loop()
 
         run_coro_in_background(self.start_processing)
         run_coro_in_background(self.start_progress_updates)

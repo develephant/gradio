@@ -1257,3 +1257,94 @@ def Success(  # noqa: N802
     log_message(
         message, title=title, level="success", duration=duration, visible=visible
     )
+
+
+def emit(event_name: str, data: Any | None = None) -> None:
+    """
+    Fires a named server-side local event from within a running event handler,
+    triggering any listeners registered with gr.on([gr.LocalEvent(event_name)], ...).
+    The payload is accessible in the receiving handler via a gr.LocalEventData type hint.
+
+    This is a backend-only signal — it runs registered receivers directly in the
+    server process. It does not push UI updates to the browser. To reflect results
+    in the UI, have your receiver write to a gr.State and use a gr.Timer to poll it.
+
+    Must be called from within a running Gradio event handler. Silently no-ops if
+    no listeners are registered for the given event name.
+
+    Parameters:
+        event_name: The name of the local event to fire, matching the name passed to gr.LocalEvent().
+        data: Optional payload to pass to the receiving handler via gr.LocalEventData.
+
+    Example:
+        import gradio as gr
+
+        my_event = gr.LocalEvent("my_event")
+
+        def emitter(text):
+            gr.emit("my_event", data={"msg": text})
+            return "emitted"
+
+        def receiver(evt: gr.LocalEventData):
+            print(f"received: {evt.data}")
+
+        with gr.Blocks() as demo:
+            inp = gr.Textbox()
+            out = gr.Textbox()
+            btn = gr.Button("Go")
+            btn.click(emitter, inputs=inp, outputs=out)
+            gr.on([my_event], receiver, inputs=None, outputs=None)
+        demo.launch()
+    """
+    import asyncio
+    import inspect
+
+    import anyio
+    from gradio.context import Context, LocalContext
+    from gradio.events import LocalEventData
+
+    blocks = LocalContext.blocks.get(None) or Context.root_block
+    if blocks is None:
+        raise RuntimeError(
+            "gr.emit() must be called from within a running Gradio event handler."
+        )
+
+    blocks_config = blocks.default_config
+    target_fns = [
+        fn
+        for fn in blocks_config.fns.values()
+        if any(bid is None and ename == event_name for bid, ename in fn.targets)
+    ]
+    if not target_fns:
+        return
+
+    event_data = LocalEventData(target=None, data=data)
+
+    async def _run_receivers():
+        for target_fn in target_fns:
+            if target_fn.fn is None:
+                continue
+            # Build args: inject LocalEventData for any parameter typed as LocalEventData
+            sig = inspect.signature(target_fn.fn)
+            args = []
+            for param in sig.parameters.values():
+                hint = param.annotation
+                if (
+                    hint is not inspect.Parameter.empty
+                    and inspect.isclass(hint)
+                    and issubclass(hint, LocalEventData)
+                ):
+                    args.append(event_data)
+                else:
+                    args.append(None)
+            if inspect.iscoroutinefunction(target_fn.fn):
+                await target_fn.fn(*args)
+            else:
+                await anyio.to_thread.run_sync(lambda: target_fn.fn(*args))
+
+    queue = getattr(blocks, "_queue", None)
+    if queue is not None and hasattr(queue, "loop"):
+        asyncio.run_coroutine_threadsafe(_run_receivers(), queue.loop)
+    else:
+        # Fallback: called from async context (e.g. tests)
+        asyncio.ensure_future(_run_receivers())

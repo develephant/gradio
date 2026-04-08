@@ -498,6 +498,67 @@ class CopyData(EventData):
         """
 
 
+@document()
+class LocalEventData(EventData):
+    """
+    The gr.LocalEventData class is a subclass of gr.EventData that carries the payload from a gr.emit() call.
+    When gr.LocalEventData is added as a type hint to an argument of an event listener, a gr.LocalEventData
+    object will automatically be passed as the value of that argument.
+
+    Example:
+        import gradio as gr
+
+        my_event = gr.LocalEvent("my_event")
+
+        def emitter(text):
+            gr.emit("my_event", data={"msg": text})
+            return "emitted"
+
+        def receiver(evt: gr.LocalEventData):
+            return f"received: {evt.data['msg']}"
+
+        with gr.Blocks() as demo:
+            inp = gr.Textbox()
+            out_a = gr.Textbox()
+            out_b = gr.Textbox()
+            btn = gr.Button("Go")
+            btn.click(emitter, inputs=inp, outputs=out_a)
+            gr.on([my_event], receiver, inputs=None, outputs=out_b)
+        demo.launch()
+    """
+
+    def __init__(self, target: Block | None, data: Any):
+        super().__init__(target, data)
+        self.data: Any = data
+        """
+        The payload dict passed to gr.emit().
+        """
+
+
+class LocalEvent:
+    """
+    Creates a named server-side event handle that can be used with gr.on() as a trigger
+    and fired from within a running handler via gr.emit().
+
+    Example:
+        import gradio as gr
+
+        my_event = gr.LocalEvent("my_event")
+
+        with gr.Blocks() as demo:
+            gr.on([my_event], fn=handler, inputs=None, outputs=out)
+        demo.launch()
+    """
+
+    def __init__(self, name: str):
+        self.event_name = name
+        self.has_trigger = False
+        self.callback = None
+        self.connection = "sse"
+        self.event_specific_args = None
+        self.__self__ = None
+
+
 @dataclasses.dataclass
 class EventListenerMethod:
     block: Block | None
